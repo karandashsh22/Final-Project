@@ -1,0 +1,396 @@
+---
+title: "Final Project"
+author: "Hector He"
+date: "6/1/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(klaR)
+library(tidyverse)
+library(tidymodels)
+library(naivebayes)
+library(readr)
+library(discrim)
+library(magrittr)
+library(corrr)
+library(dplyr)
+```
+```{r}
+library(janitor)
+soccer <- read.csv('~/Desktop/Spring 2022/PSTAT 131/final project/data/Final Project Data.csv')
+soccer <- clean_names(soccer)
+# this step is intended to make the column names more accessible(e.g. no more upper-case)
+```
+
+```{r}
+soccer <- soccer %>% 
+  mutate(result = replace(result, result == "D", "NW")) %>% 
+  mutate(result = replace(result, result == "L", "NW"))
+head(soccer)
+```
+
+```{r}
+soccer <- soccer %>%
+  mutate(venue = factor(venue, levels = c('Home','Away', 'Neutral'))) %>%
+  mutate(result = factor(result, levels = c('W','NW'))) %>% 
+  mutate(cmp_2 = cmp_2/100) %>% 
+  mutate(poss = poss/100) %>% 
+  select(-c(touches, so_t_2, g_sh, g_so_t))
+```
+
+```{r}
+head(is.na.data.frame(soccer))
+# pass/passing accuracy/corner/touches are missing for cup matches
+```
+
+```{r}
+set.seed(2000)
+soccer_split <- initial_split(soccer, prop = 0.75, strata = result)
+soccer_test <- testing(soccer_split)
+soccer_train <- training(soccer_split)
+```
+
+```{r}
+soccer %>% 
+  ggplot(aes(x = result)) + geom_bar()
+```
+```{r}
+soccer %>% 
+  ggplot(aes(x = venue, group = result, color = result)) + geom_histogram(stat = 'count')
+```
+```{r}
+cor_soccer <- soccer_train %>%
+  select(sh, so_t, poss, cmp, cmp_2, ck, crd_y, crd_r, fls, off, pk) %>%
+  correlate()
+rplot(cor_soccer)
+```
+```{r}
+soccer %>% 
+  ggplot(aes(x = poss, y = cmp)) + geom_point()
+# if you are a soccer fan, you should be fairly familiar with this trend already: the more passes completed, the higher ball possession a team has to optimize our model and avoid collinearity, we will drop cmp(given cmp has missing values)
+```
+```{r}
+soccer %>% 
+  ggplot(aes(x = poss, y = cmp_2)) + geom_point()
+```
+```{r}
+soccer %>% 
+  ggplot(aes(x = cmp_2, y = cmp)) + geom_point()
+```
+```{r}
+soccer %>% 
+  ggplot(aes(x = fls, group = crd_y)) + geom_boxplot()
+# from the boxplot one can observe that more yellows typically come from more fouls, as indicated by the mean values of fls. However, there are quite a few outliers where a large number of fls only result in a relatively small number of yellow cards
+```
+```{r}
+soccer %>% 
+  ggplot(aes(x = sh, group = ck)) + geom_boxplot()
+# again, both cases can be true: many shots, few corners; many shots, many corners
+```
+
+create a recipe
+```{r}
+soccer_recipe <- recipe(result ~ so_t+cmp_2+poss+crd_y+crd_r+ck+fls+venue, data=soccer_train) %>%
+  step_impute_linear(cmp_2, impute_with = imp_vars(poss, so_t)) %>%
+  step_impute_linear(ck, impute_with = imp_vars(poss, so_t)) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact(terms = ~ poss:cmp_2) %>% 
+  step_interact(terms = ~ poss:ck) %>%
+  step_interact(terms = ~ fls:crd_y) %>% 
+  step_center(all_predictors()) %>% 
+  step_scale(all_predictors()) 
+```
+
+initial attempt: fit without tuning
+```{r}
+# create workflows
+glm_soccer_train <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+glm_wkflow <- workflow() %>% 
+  add_model(glm_soccer_train) %>% 
+  add_recipe(soccer_recipe)
+```
+
+```{r}
+qda_soccer_train <- discrim_quad() %>% 
+  set_mode("classification") %>% 
+  set_engine("MASS")
+qda_wkflow <- workflow() %>% 
+  add_model(qda_soccer_train) %>% 
+  add_recipe(soccer_recipe)
+```
+
+```{r}
+glm_soccer_fit <- fit(glm_wkflow, soccer_train)
+glm_soccer_fit %>% 
+  extract_fit_parsnip() %>% 
+  tidy()
+```
+
+```{r}
+qda_soccer_fit <- fit(qda_wkflow, soccer_train)
+```
+
+```{r}
+soccer_pre_glm <- predict(glm_soccer_fit, new_data = soccer_train, type = "prob")
+soccer_pre_glm <- bind_cols(soccer_pre_glm, soccer_train)
+soccer_pre_glm
+```
+
+```{r}
+augment(glm_soccer_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class) 
+```
+
+```{r}
+augment(qda_soccer_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class) 
+```
+
+```{r}
+glm_soccer_acc <- augment(glm_soccer_fit, new_data = soccer_train) %>%
+  accuracy(truth = result, estimate = .pred_class)
+glm_soccer_acc
+```
+
+```{r}
+qda_soccer_acc <- augment(qda_soccer_fit, new_data = soccer_train) %>%
+  accuracy(truth = result, estimate = .pred_class)
+qda_soccer_acc
+```
+
+data folding
+```{r}
+soccer_folds <- vfold_cv(soccer_train, v = 10, strata = result)
+soccer_folds
+```
+
+```{r}
+glm_soccer_fit_folded <- fit_resamples(glm_wkflow, soccer_folds)
+collect_metrics(glm_soccer_fit_folded)
+```
+
+```{r}
+qda_soccer_fit_folded <- fit_resamples(qda_wkflow, soccer_folds)
+collect_metrics(qda_soccer_fit_folded)
+```
+
+data tuning
+model 1: logistic
+```{r}
+library(glmnet)
+soccer_tune_glmnet <- 
+  multinom_reg(penalty = tune(), mixture = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("glmnet")
+```
+
+```{r}
+glmnet_tune_wkflow <- workflow() %>% 
+  add_recipe(soccer_recipe) %>% 
+  add_model(soccer_tune_glmnet)
+```
+
+```{r}
+# tune both 'penalty' and 'mixture'
+soccer_grid_glmnet <- grid_regular(penalty(range = c(-5, 5)), mixture(range = c(0, 1)), levels = 8)
+soccer_grid_glmnet
+```
+
+```{r}
+glmnet_tune_res <- tune_grid(glmnet_tune_wkflow, resamples = soccer_folds, grid = soccer_grid_glmnet)
+glmnet_tune_res
+```
+
+```{r}
+autoplot(glmnet_tune_res)
+# we can conclude from our graph that small penalty and mixture are much desired for higher accuracy
+```
+
+```{r}
+collect_metrics(glmnet_tune_res)
+```
+
+```{r}
+glmnet_best_tuned <- select_best(glmnet_tune_res, metric = "roc_auc")
+glmnet_best_tuned
+```
+
+```{r}
+glmnet_tuned_final <- finalize_workflow(glmnet_tune_wkflow, glmnet_best_tuned)
+glmnet_tuned_fit <- fit(glmnet_tuned_final, data = soccer_train)
+```
+
+```{r}
+glmnet_pre_tuned <- predict(glmnet_tuned_fit, new_data = soccer_train, type = "prob")
+glmnet_pre_tuned <- bind_cols(glmnet_pre_tuned, soccer_train)
+glmnet_pre_tuned
+```
+
+```{r}
+augment(glmnet_tuned_fit, new_data = soccer_train) %>% 
+  roc_auc(result, .pred_W)
+```
+
+```{r}
+augment(glmnet_tuned_fit, new_data = soccer_train) %>%
+  roc_curve(truth = result, estimate = .pred_W) %>%
+  autoplot()
+```
+
+```{r}
+augment(glmnet_tuned_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class) 
+```
+
+```{r}
+# is random trees a better model for our problem?
+library(rpart.plot)
+library(vip)
+library(randomForest)
+library(xgboost)
+tree_soccer <- decision_tree() %>%
+  set_engine("rpart")
+tree_soccer_class <- tree_soccer %>%
+  set_mode("classification")
+```
+
+```{r}
+class_tree_soccer_fit <- tree_soccer_class %>%
+  fit(result ~ cmp+cmp_2+poss+crd_y+crd_r+ck+fls+venue, data = soccer_train)
+```
+
+```{r}
+class_tree_soccer_fit %>%
+  extract_fit_engine() %>%
+  rpart.plot()
+```
+
+```{r}
+augment(class_tree_soccer_fit, new_data = soccer_train) %>%
+  accuracy(truth = result, estimate = .pred_class)
+```
+
+```{r}
+augment(class_tree_soccer_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class)
+```
+
+```{r}
+# Now let's tune this model
+tree_tune_wkflow <- workflow() %>%
+  add_model(tree_soccer_class %>% set_args(cost_complexity = tune())) %>%
+  add_formula(result ~ cmp+cmp_2+poss+crd_y+crd_r+ck+fls+venue)
+```
+
+```{r}
+set.seed(2000)
+soccer_grid_tree <- grid_regular(cost_complexity(range = c(-3, -1)), levels = 10)
+tree_tune_res <- tune_grid(
+  tree_tune_wkflow, 
+  resamples = soccer_folds, 
+  grid = soccer_grid_tree, 
+  metrics = metric_set(accuracy)
+)
+```
+
+```{r}
+autoplot(tree_tune_res)
+```
+
+
+```{r}
+collect_metrics(tree_tune_res)
+```
+
+```{r}
+tree_best_tuned <- select_best(tree_tune_res)
+tree_best_tuned
+```
+
+```{r}
+tree_tuned_final <- finalize_workflow(tree_tune_wkflow, tree_best_tuned)
+tree_tuned_fit <- fit(tree_tuned_final, data = soccer_train)
+tree_tuned_fit %>%
+  extract_fit_engine() %>%
+  rpart.plot()
+```
+
+```{r}
+bagging_soccer <- rand_forest(mtry = .cols()) %>%
+  set_engine("randomForest", importance = TRUE) %>%
+  set_mode("classification")
+```
+
+```{r}
+bagging_soccer_fit <- fit(bagging_soccer, result ~ sh+so_t+cmp_2+poss+crd_y+crd_r+ck+fls+venue, 
+                   data = soccer_train)
+```
+
+```{r}
+augment(bagging_soccer_fit, soccer_train) %>%
+  rmse(truth = result, estimate = .pred_class)
+```
+```{r}
+augment(bagging_soccer_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class)
+```
+```{r}
+augment(bagging_soccer_fit, new_data = soccer_train) %>%
+  ggplot(aes(result, .pred_class)) +
+  geom_bar
+```
+```{r}
+vip(bagging_soccer_fit)
+```
+```{r}
+rand_fr_soccer <- rand_forest(mtry = 5) %>%
+  set_engine("randomForest", importance = TRUE) %>%
+  set_mode("classification")
+```
+
+```{r}
+rand_fr_soccer_fit <- fit(rand_fr_soccer, 
+                          result ~ sh+so_t+cmp_2+poss+crd_y+crd_r+ck+fls+venue, 
+                          data = soccer_train)
+```
+
+```{r}
+augment(rand_fr_soccer_fit, new_data = soccer_train) %>%
+  rmse(truth = result, estimate = .pred_class)
+```
+```{r}
+vip(rand_fr_soccer_fit)
+```
+```{r}
+boost_soccer <- boost_tree(trees = 2000, tree_depth = 2) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+```
+
+```{r}
+boost_soccer_fit <- fit(boost_soccer, 
+                        result ~ sh+so_t+cmp_2+poss+crd_y+crd_r+ck+fls+venue, 
+                        data = soccer_train)
+```
+
+```{r}
+augment(boost_fit, new_data = soccer_train) %>%
+  rmse(truth = result, estimate = .pred_class)
+```
+
+
+
+
+
+
+
+
+
+
