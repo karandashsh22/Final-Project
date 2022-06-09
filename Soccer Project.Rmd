@@ -323,70 +323,259 @@ tree_tuned_fit %>%
 ```
 
 ```{r}
+tree_pre_tuned <- predict(tree_tuned_fit, new_data = soccer_train, type = "prob")
+tree_pre_tuned <- bind_cols(tree_pre_tuned, soccer_train)
+tree_pre_tuned
+```
+
+```{r}
+augment(tree_tuned_fit, new_data = soccer_train) %>% 
+  roc_auc(result, .pred_W)
+```
+
+```{r}
+augment(tree_tuned_fit, new_data = soccer_train) %>%
+  roc_curve(truth = result, estimate = .pred_W) %>%
+  autoplot()
+```
+
+```{r}
+augment(tree_tuned_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class) 
+```
+
+```{r}
 bagging_soccer <- rand_forest(mtry = .cols()) %>%
-  set_engine("randomForest", importance = TRUE) %>%
+  set_engine("ranger", importance = 'impurity') %>%
   set_mode("classification")
 ```
 
 ```{r}
-bagging_soccer_fit <- fit(bagging_soccer, result ~ sh+so_t+cmp_2+poss+crd_y+crd_r+ck+fls+venue, 
+bagging_soccer_fit <- fit(bagging_soccer, result ~ sh+so_t+poss+crd_y+crd_r+fls+venue, 
                    data = soccer_train)
 ```
 
 ```{r}
-augment(bagging_soccer_fit, soccer_train) %>%
-  rmse(truth = result, estimate = .pred_class)
+vip(bagging_soccer_fit)
 ```
+
+```{r}
+augment(bagging_soccer_fit, new_data = soccer_train) %>%
+  accuracy(truth = result, estimate = .pred_class)
+```
+
 ```{r}
 augment(bagging_soccer_fit, new_data = soccer_train) %>%
   conf_mat(truth = result, estimate = .pred_class)
 ```
+
 ```{r}
-augment(bagging_soccer_fit, new_data = soccer_train) %>%
-  ggplot(aes(result, .pred_class)) +
-  geom_bar
+soccer_pre_bagging <- predict(bagging_soccer_fit, new_data = soccer_train, type = "prob")
+soccer_pre_bagging <- bind_cols(soccer_pre_bagging, soccer_train)
+soccer_pre_bagging
 ```
+
 ```{r}
-vip(bagging_soccer_fit)
-```
-```{r}
+# finally, let's use random forest
 rand_fr_soccer <- rand_forest(mtry = 5) %>%
-  set_engine("randomForest", importance = TRUE) %>%
+  set_engine("ranger", importance = 'impurity') %>%
   set_mode("classification")
 ```
 
 ```{r}
 rand_fr_soccer_fit <- fit(rand_fr_soccer, 
-                          result ~ sh+so_t+cmp_2+poss+crd_y+crd_r+ck+fls+venue, 
+                          result ~ sh+so_t+poss+crd_y+crd_r+fls+venue, 
                           data = soccer_train)
 ```
 
 ```{r}
-augment(rand_fr_soccer_fit, new_data = soccer_train) %>%
-  rmse(truth = result, estimate = .pred_class)
-```
-```{r}
 vip(rand_fr_soccer_fit)
 ```
+
 ```{r}
-boost_soccer <- boost_tree(trees = 2000, tree_depth = 2) %>%
+soccer_pre_rand_fr <- predict(rand_fr_soccer_fit, new_data = soccer_train, type = "prob")
+soccer_pre_rand_fr <- bind_cols(soccer_pre_rand_fr, soccer_train)
+soccer_pre_rand_fr
+```
+
+```{r}
+augment(rand_fr_soccer_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class) 
+```
+
+```{r}
+rand_fr_soccer_acc <- augment(rand_fr_soccer_fit, new_data = soccer_train) %>%
+  accuracy(truth = result, estimate = .pred_class)
+rand_fr_soccer_acc
+```
+
+```{r}
+# Now let's tune this model
+rand_fr_tune_wkflow <- workflow() %>%
+  add_model(rand_fr_soccer %>% set_args(mtry = tune(), trees = tune(), min_n = tune())) %>%
+  add_formula(result ~ sh+so_t+poss+crd_y+crd_r+fls+venue)
+```
+
+```{r}
+set.seed(2000)
+soccer_grid_rand_fr <- grid_regular(mtry(range = c(1, 6)), 
+                                    trees(range = c(10,2000)),
+                                    min_n(range = c(1,6)))
+rand_fr_tune_res <- tune_grid(
+  rand_fr_tune_wkflow, 
+  resamples = soccer_folds, 
+  grid = soccer_grid_rand_fr, 
+  metrics = metric_set(accuracy)
+)
+```
+
+```{r}
+autoplot(rand_fr_tune_res)
+```
+
+```{r}
+collect_metrics(rand_fr_tune_res)
+```
+
+```{r}
+rand_fr_best_tuned <- select_best(rand_fr_tune_res)
+rand_fr_best_tuned
+```
+
+```{r}
+rand_fr_tuned_final <- finalize_workflow(rand_fr_tune_wkflow, rand_fr_best_tuned)
+rand_fr_tuned_fit <- fit(rand_fr_tuned_final, data = soccer_train)
+rand_fr_tuned_fit %>%
+  extract_fit_engine()
+```
+
+```{r}
+rand_fr_pre_tuned <- predict(rand_fr_tuned_fit, new_data = soccer_train, type = "prob")
+rand_fr_pre_tuned <- bind_cols(rand_fr_pre_tuned, soccer_train)
+rand_fr_pre_tuned
+```
+
+```{r}
+augment(rand_fr_tuned_fit, new_data = soccer_train) %>% 
+  roc_auc(result, .pred_W)
+```
+
+```{r}
+augment(rand_fr_tuned_fit, new_data = soccer_train) %>%
+  roc_curve(truth = result, estimate = .pred_W) %>%
+  autoplot()
+```
+
+```{r}
+augment(rand_fr_tuned_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class) 
+```
+
+```{r}
+boost_soccer <- boost_tree(trees = 2222, tree_depth = 4) %>%
   set_engine("xgboost") %>%
   set_mode("classification")
 ```
 
 ```{r}
 boost_soccer_fit <- fit(boost_soccer, 
-                        result ~ sh+so_t+cmp_2+poss+crd_y+crd_r+ck+fls+venue, 
-                        data = soccer_train)
+                          result ~ ck+cmp+cmp_2+sh+so_t+poss+crd_y+crd_r+fls+venue, 
+                          data = soccer_train)
 ```
 
 ```{r}
-augment(boost_fit, new_data = soccer_train) %>%
-  rmse(truth = result, estimate = .pred_class)
+vip(boost_soccer_fit)
+```
+
+```{r}
+soccer_pre_boost <- predict(boost_soccer_fit, new_data = soccer_train, type = "prob")
+soccer_pre_boost <- bind_cols(soccer_pre_boost, soccer_train)
+soccer_pre_boost
+```
+
+```{r}
+augment(boost_soccer_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class) 
+```
+
+```{r}
+boost_soccer_acc <- augment(boost_soccer_fit, new_data = soccer_train) %>%
+  accuracy(truth = result, estimate = .pred_class)
+boost_soccer_acc
+```
+
+```{r}
+# Now let's tune this model
+boost_tune_wkflow <- workflow() %>%
+  add_model(boost_soccer %>% set_args(trees = tune())) %>%
+  add_formula(result ~ ck+cmp+cmp_2+sh+so_t+poss+crd_y+crd_r+fls+venue)
+```
+
+```{r}
+set.seed(2000)
+soccer_grid_boost <- grid_regular(trees(range = c(10,2000)))
+boost_tune_res <- tune_grid(
+  boost_tune_wkflow, 
+  resamples = soccer_folds, 
+  grid = soccer_grid_boost, 
+  metrics = metric_set(accuracy)
+)
+```
+
+```{r}
+autoplot(boost_tune_res)
+```
+
+```{r}
+collect_metrics(boost_tune_res)
+```
+
+```{r}
+boost_best_tuned <- select_best(boost_tune_res)
+boost_best_tuned
+```
+
+```{r}
+boost_tuned_final <- finalize_workflow(boost_tune_wkflow, boost_best_tuned)
+boost_tuned_fit <- fit(boost_tuned_final, data = soccer_train)
+boost_tuned_fit %>%
+  extract_fit_engine()
+```
+
+```{r}
+boost_pre_tuned <- predict(boost_tuned_fit, new_data = soccer_train, type = "prob")
+boost_pre_tuned <- bind_cols(boost_pre_tuned, soccer_train)
+boost_pre_tuned
+```
+
+```{r}
+augment(boost_tuned_fit, new_data = soccer_train) %>% 
+  roc_auc(result, .pred_W)
+```
+
+```{r}
+augment(boost_tuned_fit, new_data = soccer_train) %>%
+  roc_curve(truth = result, estimate = .pred_W) %>%
+  autoplot()
+```
+
+```{r}
+augment(boost_tuned_fit, new_data = soccer_train) %>%
+  conf_mat(truth = result, estimate = .pred_class) 
 ```
 
 
+```{r}
+# Let's fit the best model into our testing set
+augment(glmnet_tuned_fit, new_data = soccer_test) %>% 
+  roc_auc(truth = result, estimate = .pred_W)
+```
 
+```{r}
+augment(glmnet_tuned_fit, new_data = soccer_test) %>%
+  roc_curve(truth = result, estimate = .pred_W) %>%
+  autoplot()
+```
 
 
 
