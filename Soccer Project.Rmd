@@ -10,10 +10,17 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-library(klaR)
+# INTRODUCTION:
+
+# Soccer is one of the most prestigious sports worldwide, and statistics can always be a good tool for the analysis of soccer matches. In this project, we are interested in how the final match result can be determined by some match stats, particularly the 10 most frequently used indicators in soccer stats that are usually displayed on Google: shots, shots on target, possession, corners, passes, passing accuracy, offsides, fouls, yellow cards, red cards, plus whether the games were held in home/away/neutral stadiums. The learning process is to some extent inferential based and supervised. For my study purpose, I selected the performance of 4 different teams in the English Premier League, 2 top-notch teams (Liverpool, Manchester City, they won the last 5 premier league titles), 2 mid-table teams (Brighton, Crystal Palace, they are below average at their best), and 1 bottom side (Aston Villa), for the past 5 seasons across all competitions
+
+# Note: from 17/18 to 18/19 Aston Villa was competing in the English Championships (the second-tier soccer competition in England) and the complete team stats for this level of competition are nearly impossible to find online, so I only collected their 3 seasons' stats from 19/20 to 21/22
+```
+
+```{r}
+# Let's load some packages first
 library(tidyverse)
 library(tidymodels)
-library(naivebayes)
 library(readr)
 library(discrim)
 library(magrittr)
@@ -21,6 +28,7 @@ library(corrr)
 library(dplyr)
 ```
 ```{r}
+# the first step of many: DATA CLEANING
 library(janitor)
 soccer <- read.csv('~/Desktop/Spring 2022/PSTAT 131/final project/data/Final Project Data.csv')
 soccer <- clean_names(soccer)
@@ -32,6 +40,7 @@ soccer <- soccer %>%
   mutate(result = replace(result, result == "D", "NW")) %>% 
   mutate(result = replace(result, result == "L", "NW"))
 head(soccer)
+# Practically speaking, the main concern for every soccer team is to win the game. Winning should be the most desired outcome, and other than that, it is considered a relatively undesired outcome, because either to draw or to lose (the worst scenario) means a team loses points in a league. Even a draw can often be very costly for a top-notch team in the title run. Since we are most interested in the determinant for winning a game, to simplify the model I combined “D” and ”L” into one same group, denoted as “NW”(not a win). Then, I converted all predictors with repeated character values into factors
 ```
 
 ```{r}
@@ -41,16 +50,20 @@ soccer <- soccer %>%
   mutate(cmp_2 = cmp_2/100) %>% 
   mutate(poss = poss/100) %>% 
   select(-c(touches, so_t_2, g_sh, g_so_t))
+# Redundant information in the dataset was not included in my models. These are: date, opponent, comp, since the fixture of the game (e.g., when the match was played and between whom) is not important for our analysis which is based on the performance of each team on the field. Nonetheless, the date helped me in the initial data compiling process so that I could rank individual observations (every single match) chronologically. Comp also helped locate the type of missing values in the dataset, as they tend to come from certain types of competitions.
+
+# gf and ga were not included, since we are only interested in the final result of the game, namely, whether a team loses, draws, or wins, instead of how many goals were scored or conceded(and they can be directly used to determine the outcome, as gf-ga >0, a win, gf-ga =0, a draw, or gf-ga <0, a loss. so_t_2, g_sh, g_so_t were also deleted since these predictors have direct linear mathematical relationship with one another, as g_sh = ga/sh, g_so_t = ga/so_t, goal per shot on target, so_t_2 = so_t/sh, shot/shot on target ratio. Finally, touches was removed due to its high correlation with cmp
 ```
 
 ```{r}
 head(is.na.data.frame(soccer))
-# pass/passing accuracy/corner/touches are missing for cup matches
+# the number of corners, touches, passes, and pass accuracy are missing for cup games (Champions League, Community Shield, FA Cup, EFL Cup). These missing values can be imputed in our linear models.
 ```
 
 ```{r}
+# DATA SPLITTING 
 set.seed(2000)
-soccer_split <- initial_split(soccer, prop = 0.75, strata = result)
+soccer_split <- initial_split(soccer, prop = 0.75, strata = result) # stratified on result
 soccer_test <- testing(soccer_split)
 soccer_train <- training(soccer_split)
 ```
@@ -58,16 +71,30 @@ soccer_train <- training(soccer_split)
 ```{r}
 soccer %>% 
   ggplot(aes(x = result)) + geom_bar()
+# Obviously, even though City and Liverpool have nearly perfect records, Crystal Palace, Brighton, and Aston Villa have not (not even close). That’s why we have nearly as many NWs as W’s, which means almost half of the games are either a draw or defeat.
 ```
 ```{r}
 soccer %>% 
   ggplot(aes(x = venue, group = result, color = result)) + geom_histogram(stat = 'count')
+# the stadium does play a role in determining the match result. more than 50% of home games are won while more than 50% of away games end up in defeat/draw(in 120 minutes). just think of the atmosphere the home fans can create
 ```
 ```{r}
+# The correlation graph provides a more intuitive view of how each predictor is related to the other.
+
 cor_soccer <- soccer_train %>%
   select(sh, so_t, poss, cmp, cmp_2, ck, crd_y, crd_r, fls, off, pk) %>%
   correlate()
 rplot(cor_soccer)
+
+ # The dark blue dots denote a strong positive correlation between cmp and poss, a relatively strong positive correlation between cmp and cmp_2/poss and cmp_2. In fact, higher ball possession is often guaranteed by high passing accuracy (otherwise the team loses control of the ball)
+
+# so_t/sh and sh/ck are somewhat positively related. Rule of thumb: if you take many shots, then at least you can make (but not necessarily) a few of them on target and possibly converted into goals. There’s a chance that a shot will be deflected by the defender and crossed the goal line, and that’s how a corner kick is given. So, why are so_t and ck less correlated? Because when the shot is on target, the most likely scenario would be that it results in a goal (or own goal), or is saved and comes under control of the goalkeeper: hence, no corners. 
+
+# Note: there’s a slight positive correlation between fls and crd_y: more fouls will likely result in a few yellow cards and more yellow cards will likely result in a red card (but not necessarily, it depends on how serious the foul is, and whether it is committed by the same player or not; for simplicity, we consider crd_y and crd_r as having minimal correlation)
+
+# The red dots denote a negative correlation between fls/cmp, fls/cmp_2, fls/poss. Conceivably, the team with lower possession and passing accuracy will try to commit fouls to interrupt the rival team’s passing.
+
+# Off (number of offsides)/pk has virtually no correlation with any other predictors. It makes sense: in reality, the result of a game has barely anything to do with the number of offsides. Quite a surprise from pk: given that a penalty is awarded from a foul in the box, it is expected to have a positive correlation with fls. One possible explanation would be pk is unstable (with randomness, it usually is at the referee’s own discretion) and fouls are not always committed in the box
 ```
 ```{r}
 soccer %>% 
@@ -77,10 +104,12 @@ soccer %>%
 ```{r}
 soccer %>% 
   ggplot(aes(x = poss, y = cmp_2)) + geom_point()
+# this poss and cmp_2 are also correlated, higher passing accuracy means higher possession
 ```
 ```{r}
 soccer %>% 
   ggplot(aes(x = cmp_2, y = cmp)) + geom_point()
+# passing accuracy is directly related to number of passes
 ```
 ```{r}
 soccer %>% 
@@ -93,8 +122,8 @@ soccer %>%
 # again, both cases can be true: many shots, few corners; many shots, many corners
 ```
 
-create a recipe
 ```{r}
+# CREATE A RECIPE for the logistic model
 soccer_recipe <- recipe(result ~ so_t+cmp_2+poss+crd_y+crd_r+ck+fls+venue, data=soccer_train) %>%
   step_impute_linear(cmp_2, impute_with = imp_vars(poss, so_t)) %>%
   step_impute_linear(ck, impute_with = imp_vars(poss, so_t)) %>% 
@@ -104,10 +133,13 @@ soccer_recipe <- recipe(result ~ so_t+cmp_2+poss+crd_y+crd_r+ck+fls+venue, data=
   step_interact(terms = ~ fls:crd_y) %>% 
   step_center(all_predictors()) %>% 
   step_scale(all_predictors()) 
+# interaction terms are created to avoid collinearity, sh is not included due to its correlation with many other predictors
 ```
 
-initial attempt: fit without tuning
 ```{r}
+# LOGISTIC MODEL
+
+# try apply the model without any tuning
 # create workflows
 glm_soccer_train <- logistic_reg() %>% 
   set_engine("glm") %>% 
@@ -118,6 +150,7 @@ glm_wkflow <- workflow() %>%
 ```
 
 ```{r}
+# why not also try this on QDA
 qda_soccer_train <- discrim_quad() %>% 
   set_mode("classification") %>% 
   set_engine("MASS")
@@ -127,6 +160,7 @@ qda_wkflow <- workflow() %>%
 ```
 
 ```{r}
+# fit on the training set
 glm_soccer_fit <- fit(glm_wkflow, soccer_train)
 glm_soccer_fit %>% 
   extract_fit_parsnip() %>% 
@@ -134,39 +168,46 @@ glm_soccer_fit %>%
 ```
 
 ```{r}
+# do the same for QDA
 qda_soccer_fit <- fit(qda_wkflow, soccer_train)
 ```
 
 ```{r}
+# make a prediction for the training set
 soccer_pre_glm <- predict(glm_soccer_fit, new_data = soccer_train, type = "prob")
 soccer_pre_glm <- bind_cols(soccer_pre_glm, soccer_train)
 soccer_pre_glm
 ```
 
 ```{r}
+# create a confusion matrix
 augment(glm_soccer_fit, new_data = soccer_train) %>%
   conf_mat(truth = result, estimate = .pred_class) 
 ```
 
 ```{r}
+# repeat for QDA model
 augment(qda_soccer_fit, new_data = soccer_train) %>%
-  conf_mat(truth = result, estimate = .pred_class) 
+  conf_mat(truth = result, estimate = .pred_class) # does not look very good!
 ```
 
 ```{r}
+# get accuracy
 glm_soccer_acc <- augment(glm_soccer_fit, new_data = soccer_train) %>%
   accuracy(truth = result, estimate = .pred_class)
 glm_soccer_acc
 ```
 
 ```{r}
+# repeat for QDA model
 qda_soccer_acc <- augment(qda_soccer_fit, new_data = soccer_train) %>%
   accuracy(truth = result, estimate = .pred_class)
 qda_soccer_acc
+# logistic (linear) model does not work very well on this dataset
 ```
 
-data folding
 ```{r}
+# DATA FOLDING
 soccer_folds <- vfold_cv(soccer_train, v = 10, strata = result)
 soccer_folds
 ```
@@ -174,16 +215,12 @@ soccer_folds
 ```{r}
 glm_soccer_fit_folded <- fit_resamples(glm_wkflow, soccer_folds)
 collect_metrics(glm_soccer_fit_folded)
+# again, linear models do not work really well for this
 ```
 
 ```{r}
-qda_soccer_fit_folded <- fit_resamples(qda_wkflow, soccer_folds)
-collect_metrics(qda_soccer_fit_folded)
-```
-
-data tuning
-model 1: logistic
-```{r}
+# DATA TUNING: LOGISTIC REGRESSION
+# maybe by parameter tuning we can improve the result?
 library(glmnet)
 soccer_tune_glmnet <- 
   multinom_reg(penalty = tune(), mixture = tune()) %>% 
@@ -192,7 +229,7 @@ soccer_tune_glmnet <-
 ```
 
 ```{r}
-glmnet_tune_wkflow <- workflow() %>% 
+glmnet_tune_wkflow <- workflow() %>% # generate tuning workflow
   add_recipe(soccer_recipe) %>% 
   add_model(soccer_tune_glmnet)
 ```
@@ -200,12 +237,10 @@ glmnet_tune_wkflow <- workflow() %>%
 ```{r}
 # tune both 'penalty' and 'mixture'
 soccer_grid_glmnet <- grid_regular(penalty(range = c(-5, 5)), mixture(range = c(0, 1)), levels = 8)
-soccer_grid_glmnet
 ```
 
 ```{r}
 glmnet_tune_res <- tune_grid(glmnet_tune_wkflow, resamples = soccer_folds, grid = soccer_grid_glmnet)
-glmnet_tune_res
 ```
 
 ```{r}
@@ -218,16 +253,19 @@ collect_metrics(glmnet_tune_res)
 ```
 
 ```{r}
+# get the best tuned model
 glmnet_best_tuned <- select_best(glmnet_tune_res, metric = "roc_auc")
 glmnet_best_tuned
 ```
 
 ```{r}
+# then fit it into training set
 glmnet_tuned_final <- finalize_workflow(glmnet_tune_wkflow, glmnet_best_tuned)
 glmnet_tuned_fit <- fit(glmnet_tuned_final, data = soccer_train)
 ```
 
 ```{r}
+# fit the tuned model on the training set
 glmnet_pre_tuned <- predict(glmnet_tuned_fit, new_data = soccer_train, type = "prob")
 glmnet_pre_tuned <- bind_cols(glmnet_pre_tuned, soccer_train)
 glmnet_pre_tuned
@@ -249,8 +287,11 @@ augment(glmnet_tuned_fit, new_data = soccer_train) %>%
   conf_mat(truth = result, estimate = .pred_class) 
 ```
 
+
+
 ```{r}
-# is random trees a better model for our problem?
+# CLASSIFICATION TREE
+# is this a better model for our problem?
 library(rpart.plot)
 library(vip)
 library(randomForest)
@@ -262,19 +303,26 @@ tree_soccer_class <- tree_soccer %>%
 ```
 
 ```{r}
+# try to it into training set without any parameter tuning
 class_tree_soccer_fit <- tree_soccer_class %>%
-  fit(result ~ cmp+cmp_2+poss+crd_y+crd_r+ck+fls+venue, data = soccer_train)
+  fit(result ~ sh+so_t+cmp+cmp_2+poss+crd_y+crd_r+ck+fls+venue, data = soccer_train)
 ```
 
 ```{r}
+# display the result on a graph
 class_tree_soccer_fit %>%
   extract_fit_engine() %>%
   rpart.plot()
 ```
 
 ```{r}
-augment(class_tree_soccer_fit, new_data = soccer_train) %>%
-  accuracy(truth = result, estimate = .pred_class)
+vip(class_tree_soccer_fit)
+```
+
+```{r}
+augment(class_tree_soccer_fit, new_data = soccer_train) %>% # get accuracy
+  accuracy(truth = result, estimate = .pred_class) 
+# already better than the logistic model but we can try to do better
 ```
 
 ```{r}
@@ -283,7 +331,8 @@ augment(class_tree_soccer_fit, new_data = soccer_train) %>%
 ```
 
 ```{r}
-# Now let's tune this model
+# TUNING
+# tune the parameter cost_complexity
 tree_tune_wkflow <- workflow() %>%
   add_model(tree_soccer_class %>% set_args(cost_complexity = tune())) %>%
   add_formula(result ~ cmp+cmp_2+poss+crd_y+crd_r+ck+fls+venue)
@@ -310,11 +359,13 @@ collect_metrics(tree_tune_res)
 ```
 
 ```{r}
+# fetch our optimal tuned model
 tree_best_tuned <- select_best(tree_tune_res)
 tree_best_tuned
 ```
 
 ```{r}
+# apply it to the training set
 tree_tuned_final <- finalize_workflow(tree_tune_wkflow, tree_best_tuned)
 tree_tuned_fit <- fit(tree_tuned_final, data = soccer_train)
 tree_tuned_fit %>%
@@ -326,6 +377,7 @@ tree_tuned_fit %>%
 tree_pre_tuned <- predict(tree_tuned_fit, new_data = soccer_train, type = "prob")
 tree_pre_tuned <- bind_cols(tree_pre_tuned, soccer_train)
 tree_pre_tuned
+# does not look too bad, since it comes from a tree, many .pred_W/.pred_NW have same probability
 ```
 
 ```{r}
@@ -342,41 +394,12 @@ augment(tree_tuned_fit, new_data = soccer_train) %>%
 ```{r}
 augment(tree_tuned_fit, new_data = soccer_train) %>%
   conf_mat(truth = result, estimate = .pred_class) 
+# this is not the best model, apparently
 ```
 
 ```{r}
-bagging_soccer <- rand_forest(mtry = .cols()) %>%
-  set_engine("ranger", importance = 'impurity') %>%
-  set_mode("classification")
-```
-
-```{r}
-bagging_soccer_fit <- fit(bagging_soccer, result ~ sh+so_t+poss+crd_y+crd_r+fls+venue, 
-                   data = soccer_train)
-```
-
-```{r}
-vip(bagging_soccer_fit)
-```
-
-```{r}
-augment(bagging_soccer_fit, new_data = soccer_train) %>%
-  accuracy(truth = result, estimate = .pred_class)
-```
-
-```{r}
-augment(bagging_soccer_fit, new_data = soccer_train) %>%
-  conf_mat(truth = result, estimate = .pred_class)
-```
-
-```{r}
-soccer_pre_bagging <- predict(bagging_soccer_fit, new_data = soccer_train, type = "prob")
-soccer_pre_bagging <- bind_cols(soccer_pre_bagging, soccer_train)
-soccer_pre_bagging
-```
-
-```{r}
-# finally, let's use random forest
+# RANDOM FOREST
+# Then, let's use random forest
 rand_fr_soccer <- rand_forest(mtry = 5) %>%
   set_engine("ranger", importance = 'impurity') %>%
   set_mode("classification")
@@ -390,6 +413,7 @@ rand_fr_soccer_fit <- fit(rand_fr_soccer,
 
 ```{r}
 vip(rand_fr_soccer_fit)
+# so_t is far more important than sh, poss is also crucial in determining the result
 ```
 
 ```{r}
@@ -401,6 +425,7 @@ soccer_pre_rand_fr
 ```{r}
 augment(rand_fr_soccer_fit, new_data = soccer_train) %>%
   conf_mat(truth = result, estimate = .pred_class) 
+# this time much better, seems way more accurate
 ```
 
 ```{r}
@@ -410,7 +435,8 @@ rand_fr_soccer_acc
 ```
 
 ```{r}
-# Now let's tune this model
+# TUNING
+# tune the parameters mtry, trees, and min_n
 rand_fr_tune_wkflow <- workflow() %>%
   add_model(rand_fr_soccer %>% set_args(mtry = tune(), trees = tune(), min_n = tune())) %>%
   add_formula(result ~ sh+so_t+poss+crd_y+crd_r+fls+venue)
@@ -438,25 +464,25 @@ collect_metrics(rand_fr_tune_res)
 ```
 
 ```{r}
-rand_fr_best_tuned <- select_best(rand_fr_tune_res)
+rand_fr_best_tuned <- select_best(rand_fr_tune_res) # find the optimal tuned model
 rand_fr_best_tuned
 ```
 
 ```{r}
 rand_fr_tuned_final <- finalize_workflow(rand_fr_tune_wkflow, rand_fr_best_tuned)
 rand_fr_tuned_fit <- fit(rand_fr_tuned_final, data = soccer_train)
-rand_fr_tuned_fit %>%
+rand_fr_tuned_fit %>% # fit it into the training set
   extract_fit_engine()
 ```
 
 ```{r}
 rand_fr_pre_tuned <- predict(rand_fr_tuned_fit, new_data = soccer_train, type = "prob")
-rand_fr_pre_tuned <- bind_cols(rand_fr_pre_tuned, soccer_train)
+rand_fr_pre_tuned <- bind_cols(rand_fr_pre_tuned, soccer_train) # apply to predict the training set
 rand_fr_pre_tuned
 ```
 
 ```{r}
-augment(rand_fr_tuned_fit, new_data = soccer_train) %>% 
+augment(rand_fr_tuned_fit, new_data = soccer_train) %>% # test its accuracy
   roc_auc(result, .pred_W)
 ```
 
@@ -464,6 +490,7 @@ augment(rand_fr_tuned_fit, new_data = soccer_train) %>%
 augment(rand_fr_tuned_fit, new_data = soccer_train) %>%
   roc_curve(truth = result, estimate = .pred_W) %>%
   autoplot()
+# looks much better
 ```
 
 ```{r}
@@ -472,12 +499,15 @@ augment(rand_fr_tuned_fit, new_data = soccer_train) %>%
 ```
 
 ```{r}
+# BOOSTED TREE
+# finally let's use the boosted tree
 boost_soccer <- boost_tree(trees = 2222, tree_depth = 4) %>%
   set_engine("xgboost") %>%
   set_mode("classification")
 ```
 
 ```{r}
+# try it first without tuning
 boost_soccer_fit <- fit(boost_soccer, 
                           result ~ ck+cmp+cmp_2+sh+so_t+poss+crd_y+crd_r+fls+venue, 
                           data = soccer_train)
@@ -485,6 +515,7 @@ boost_soccer_fit <- fit(boost_soccer,
 
 ```{r}
 vip(boost_soccer_fit)
+# we can observe that so_t is once again the most important, closely followed by cmp_2, and cmp
 ```
 
 ```{r}
@@ -495,7 +526,7 @@ soccer_pre_boost
 
 ```{r}
 augment(boost_soccer_fit, new_data = soccer_train) %>%
-  conf_mat(truth = result, estimate = .pred_class) 
+  conf_mat(truth = result, estimate = .pred_class) # not bad!
 ```
 
 ```{r}
@@ -505,7 +536,8 @@ boost_soccer_acc
 ```
 
 ```{r}
-# Now let's tune this model
+# TUNING
+# tune the parameter trees
 boost_tune_wkflow <- workflow() %>%
   add_model(boost_soccer %>% set_args(trees = tune())) %>%
   add_formula(result ~ ck+cmp+cmp_2+sh+so_t+poss+crd_y+crd_r+fls+venue)
@@ -531,12 +563,12 @@ collect_metrics(boost_tune_res)
 ```
 
 ```{r}
-boost_best_tuned <- select_best(boost_tune_res)
+boost_best_tuned <- select_best(boost_tune_res) # find the best tuned model
 boost_best_tuned
 ```
 
 ```{r}
-boost_tuned_final <- finalize_workflow(boost_tune_wkflow, boost_best_tuned)
+boost_tuned_final <- finalize_workflow(boost_tune_wkflow, boost_best_tuned) # fit on the training set
 boost_tuned_fit <- fit(boost_tuned_final, data = soccer_train)
 boost_tuned_fit %>%
   extract_fit_engine()
@@ -544,13 +576,13 @@ boost_tuned_fit %>%
 
 ```{r}
 boost_pre_tuned <- predict(boost_tuned_fit, new_data = soccer_train, type = "prob")
-boost_pre_tuned <- bind_cols(boost_pre_tuned, soccer_train)
+boost_pre_tuned <- bind_cols(boost_pre_tuned, soccer_train) 
 boost_pre_tuned
 ```
 
 ```{r}
 augment(boost_tuned_fit, new_data = soccer_train) %>% 
-  roc_auc(result, .pred_W)
+  roc_auc(result, .pred_W) # acceptable
 ```
 
 ```{r}
@@ -564,9 +596,10 @@ augment(boost_tuned_fit, new_data = soccer_train) %>%
   conf_mat(truth = result, estimate = .pred_class) 
 ```
 
-
 ```{r}
-# Let's fit the best model into our testing set
+# TESTING 
+# now it's time to finally apply the four tuned models to the testing set to see how well they work
+# glmnet(logistic)
 augment(glmnet_tuned_fit, new_data = soccer_test) %>% 
   roc_auc(truth = result, estimate = .pred_W)
 ```
@@ -576,10 +609,74 @@ augment(glmnet_tuned_fit, new_data = soccer_test) %>%
   roc_curve(truth = result, estimate = .pred_W) %>%
   autoplot()
 ```
+```{r}
+augment(glmnet_tuned_fit, new_data = soccer_test) %>% 
+  conf_mat(truth = result, estimate = .pred_class) # 77 wrongs
+```
 
+```{r}
+# TESTING 
+# random forest
+augment(rand_fr_tuned_fit, new_data = soccer_test) %>% 
+  roc_auc(truth = result, estimate = .pred_W)
+```
 
+```{r}
+augment(rand_fr_tuned_fit, new_data = soccer_test) %>%
+  roc_curve(truth = result, estimate = .pred_W) %>%
+  autoplot()
+```
+```{r}
+augment(rand_fr_tuned_fit, new_data = soccer_test) %>% 
+  conf_mat(truth = result, estimate = .pred_class) # 86 wrongs
+```
 
+```{r}
+# TESTING 
+# classification tree
+augment(tree_tuned_fit, new_data = soccer_test) %>% 
+  roc_auc(truth = result, estimate = .pred_W)
+```
 
+```{r}
+augment(tree_tuned_fit, new_data = soccer_test) %>%
+  roc_curve(truth = result, estimate = .pred_W) %>%
+  autoplot()
+```
 
+```{r}
+augment(tree_tuned_fit, new_data = soccer_test) %>% 
+  conf_mat(truth = result, estimate = .pred_class) # 111 wrongs
+```
 
+```{r}
+# TESTING 
+# boosted tree
+augment(boost_tuned_fit, new_data = soccer_test) %>% 
+  roc_auc(truth = result, estimate = .pred_W)
+```
 
+```{r}
+augment(boost_tuned_fit, new_data = soccer_test) %>%
+  roc_curve(truth = result, estimate = .pred_W) %>%
+  autoplot()
+```
+
+```{r}
+augment(boost_tuned_fit, new_data = soccer_test) %>% 
+  conf_mat(truth = result, estimate = .pred_class) # 77 wrongs
+```
+
+```{r}
+# CONCLUSION
+
+# Procedure: In this machine learning project, I explored how the result of a soccer match is related to match statistics, by examining the stats of 5 different English Premier League clubs. The initial dataset contains 22 columns and after some data cleaning, only 8-11 are selected as predictors. One of the biggest problems among these predictors is collinearity since many stats are strongly correlated to each other. To solve this, interaction terms are created for the glmnet model (logistic, linear), and the predictor sh is intentionally dropped. Another problem is that some values in the cup games are missing for three specific predictors: cmp, cmp_2, ck. This also impacts our random forest model, so I decided not to include them in the models affected. But again, in the glmnet model, these missing values can be imputed from the variance of poss and so_t. In total, five different types of models are applied, and four of them have 1-3 parameters tuned. We used data folding to assist this procedure.
+
+# Result: The results have clearly shown us that the simple classification tree is the worst at dealing with soccer stats, which can be observed from the accuracy matrix, confusion matrix, and the roc curve graph. On the other hand, judging from the performance on the training set, random forest and boosted tree are the two most ideal models for soccer stats in this learning project, while the logistic model does not fit very well (since some assumptions, such as the additive feature tends to be violated). However, overall, cross-fold validation and parameter tuning have significantly improved the accuracy of our models, especially for the logistic(glmnet) model. Judging by the performance on the testing set, glmnet and the boosted tree work the best, each with ~79% accuracy and 77 wrong predictions in the testing set, slightly better than the 77% accuracy and 86 wrong predictions from the random forest (which could be due to overfitting, since it works the best for the training set). One can also observe that in the testing set glmnet is deals better with NW while boosted tree deals better with W. 
+
+# Reflection: from the vip chart (or the p-values in the linear model), one can observe that shots on target is always the most important indicator, closely followed by passing accuracy, then you have possession and total passes. This is consistent with real-life experiences that passing accuracy (and hence possession) determines how well a team could control and dominate on the field both offensively and defensively, while shots on target is one of the most critical factors that lead to goals. At last, we are surprised to see that venue has a higher weight in determining the result than cry_r, which is not so much consistent with real-life experiences: if a player is sent off, the team will play with the rest 10 players (or sometimes 9) against the 11 players in the rival team, and therefore their odds of winning should significantly decrease. Nonetheless, this could result from the fact that we do not have enough observations for cases such that a red card is shown to a player in the match.
+```
+
+```{r}
+# Special thanks to Sports Reference website (“FBREF”) website from which I compiled all the data that was necessary for my project. A link to their website: https://fbref.com/en/squads/822bd0ba/2021-2022/matchlogs/all_comps/schedule/Liverpool-Scores-and-Fixtures-All-Competitions
+```
