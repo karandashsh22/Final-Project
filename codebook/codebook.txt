@@ -1,0 +1,43 @@
+-date: the date of the match
+
+-Comp: the type of competition of the match, can only be one of the five: Community Shield, FA Cup, EFL Cup, Premier League, UEFA Champions League(including playoffs)
+
+-Venue: whether the match was held at home, away, or in a neutral stadium with respect to the team we are interested in
+
+-Result: final result of the game, can be W(win), L(loss), or D(draw), and if the game ended up in a penalty kick, regardless of which team won, it is denoted as a D(draw)
+
+-GF: goal scored(excluding those in penalty kicks*)
+
+-GA: goal conceded(excluding penalty kicks)
+
+-Opponent: the rival team played against
+
+-Sh: total number of shots
+
+-SoT: total number of shots on target (within, but not including, the framework)
+
+-SoT%: percentage of shots on target 
+
+-G/Sh: goal per shot*
+
+-G/SoT: goal per shot on target
+
+-PK: Penalty awarded 
+
+-Poss: ball possession, the percentage of the time the ball is under the control of one team
+
+-Touches: total number of times the players make contact with the ball
+
+-Cmp: total number of (successfully) completed passes
+
+-Cmp%: passing accuracy, total completed passes divided by total attempted passes
+
+-CK: total number of corner kicks taken*
+
+-CrdY: total number of yellow cards shown (a player is shown a yellow card for a serious foul)
+
+-CrdR: total number of red cards shown(in this case the player who receives the red card is sent off)
+
+-FIs: total number of fouls committed
+
+-Off: total number of off-side*
